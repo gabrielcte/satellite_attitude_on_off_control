@@ -10,6 +10,7 @@ python = "^3.12"
 control = "^0.10.2"
 numpy = "^2.5.4"
 matplotlib = "^3.11.2"
+numba = "^0.68.1"
 
 
 [build-system]

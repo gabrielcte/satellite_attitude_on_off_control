@@ -2,6 +2,7 @@
 import os
 
 import numpy as np
+from numba import njit
 
 from satellite_attitude_on_off_control.actuators import actuator_dynamics
 from satellite_attitude_on_off_control.integrators import RK4
@@ -9,7 +10,7 @@ from satellite_attitude_on_off_control.non_linearities import (
     deadzone,
     hysteresis,
 )
-from satellite_attitude_on_off_control.plants import satellite_dynamics
+from satellite_attitude_on_off_control.plants import rotational_dynamics
 from satellite_attitude_on_off_control.plots import (
     plot_phase_flow_satellite,
     pole_plot,
@@ -18,38 +19,55 @@ from satellite_attitude_on_off_control.plots import (
 from satellite_attitude_on_off_control.sensors import sensor_dynamics
 
 
-def system_dynamics(t, x, u, act_torque, ext_torque, Iyy, act_time_const, omega, zeta):
-    """Derivadas dos estados: theta, theta_dot, theta_medido, theta_medido_dot e torque."""
+@njit
+def system_dynamics(t, x, params):
+
+    u, act_torque, ext_torque, Iyy, act_time_const, omega, zeta = params
+
     theta, theta_dot, theta_medido, theta_medido_dot, torque = x
+
     actuator = actuator_dynamics(torque, u, act_torque, act_time_const)
-    satellite = satellite_dynamics(torque, ext_torque, Iyy)
+    satellite = rotational_dynamics(torque, ext_torque, Iyy)
     sensor = sensor_dynamics(theta, theta_medido, theta_medido_dot, omega, zeta)
+
     return np.array([
         theta_dot,
         satellite,
         theta_medido_dot,
         sensor,
         actuator,
-    ], dtype=float)
-
+    ])
 
 
 if __name__ == "__main__":
+    # Stage PARAMETERS
+    stage_diam = 1.009 # diametro externo (m)
+    stage_long = 1.110 # Comprimento do estágio(m)
+    stage_empty_mass = 170 # massa de combustível
+    stage_fuel_mass = 820 # massa de combustivel
+    stage_payload_mass = 200 # massa da carga paga (kg)
+    total_mass = stage_payload_mass + stage_fuel_mass + stage_empty_mass
+    Iyy = total_mass/12*(3*(stage_diam/2)**2+stage_long**2)                  # (kg.m²) Spacecraft inertia
 
-
-    # PARAMETERS
-    theta_com = 0.09           # (rad) Command pitch angle
+    # Actuator parameter
     deadzone_threshold = 0.01
+    delay = 0.025               # (s) Time delay
     delta_on =  0.02            # (rad) Hysteresis activation threshold
     delta_off = 0.01            # (rad) Hysteresis deactivation threshold
-    delay = 0.025              # (s) Time delay
-    act_time_const = 0.050     # (s) Actuator time constant
-    Iyy = 100                  # (kg.m²) Spacecraft inertia
-    omega = 94.24778           # (rad/s) Sensor natural frequency
-    zeta = 0.7                 # Sensor damping ratio
+    act_time_const = 0.050      # (s) Actuator time constant
+    F = 4                       # (N) Thrust
+    b = stage_diam/2            # (m) Braço de alavanca diametro do fogeute
+    act_torque = 3*F*b          # (N.m) Actuator torque
+
+    # Sensor parameters
+    omega = 94.24778            # (rad/s) Sensor natural frequency
+    zeta = 0.7                  # Sensor damping ratio
+
+
+    # Mission
+    theta_com = 0.09           # (rad) Command pitch angle
     KR = 0.5                   # (s) Rate feedback constant
-    act_torque = 25            # (N.m) Actuator torque
-    ext_torque = -12.1875      # (N.m) Disturbance torque
+    ext_torque = -1            # (N.m) Disturbance torque
 
     # CREATE OUTPUT DIRECTORY
     os.makedirs("docs", exist_ok=True)
@@ -80,7 +98,7 @@ if __name__ == "__main__":
 
 
     # SIMULATION PARAMETERS
-    tf = 10                  # (s) Final simulation time
+    tf = 200                  # (s) Final simulation time
     N = int(tf / dt)
     delay_steps = int(delay / dt)
 
@@ -129,14 +147,17 @@ if __name__ == "__main__":
 
         # DYNAMICS AND RK4 INTEGRATION
         # The delayed control u_rk is held constant during this time step.
-        x_rk = RK4(
-            lambda t_stage, x_stage: system_dynamics(
-                t_stage, x_stage, u_rk, act_torque, ext_torque, Iyy, act_time_const, omega, zeta  # noqa: B023
-            ),
-            t,
-            x_rk,
-            dt,
+        params = (
+            u_rk,
+            act_torque,
+            ext_torque,
+            Iyy,
+            act_time_const,
+            omega,
+            zeta,
         )
+
+        x_rk = RK4(system_dynamics, t, x_rk, dt, params)
 
         # Recover the states from the integrated state vector.
         thet_rk = x_rk[0]

@@ -1,4 +1,7 @@
+from numba import njit
 
-def satellite_dynamics(f, FD, I):
+
+@njit
+def rotational_dynamics(f, FD, I):
 
     return (f - FD) / I
